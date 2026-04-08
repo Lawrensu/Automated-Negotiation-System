@@ -13,6 +13,6 @@ This documentation serves to describe the design and the implementation of the A
 
 Please run these to setup the environment:
 
-```javac -cp "lib/jade.jar" -d bin (Get-ChildItem -Recurse -Filter *.java src | ForEach-Object { $_.FullName })
+```javac -cp "lib/jade.jar" -d bin (Get-ChildItem -Recurse -Filter *.java src | ForEach-Object { $_.FullName })```
 
-```java -cp "bin;lib/jade.jar" jade.Boot -gui
+```java -cp "bin;lib/jade.jar" jade.Boot -gui```
