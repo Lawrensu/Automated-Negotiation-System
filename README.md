@@ -7,3 +7,12 @@ This documentation serves to describe the design and the implementation of the A
 2. [Getting Started](docs/getting_started.md)
 3. [Development Convention](docs/development_convention.md)
 4. [Architecture/System Design](docs/system_design.md)
+
+
+## To setup:
+
+Please run these to setup the environment:
+
+```javac -cp "lib/jade.jar" -d bin (Get-ChildItem -Recurse -Filter *.java src | ForEach-Object { $_.FullName })
+
+```java -cp "bin;lib/jade.jar" jade.Boot -gui
