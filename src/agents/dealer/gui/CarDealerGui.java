@@ -1,9 +1,10 @@
-package gui;
+package agents.dealer.gui;
 
-import agents.DealerAgent;
 import java.awt.*;
 import java.awt.event.*;
 import javax.swing.*;
+
+import agents.dealer.DealerAgent;
 
 public class CarDealerGui extends JFrame{
     private DealerAgent myAgent;

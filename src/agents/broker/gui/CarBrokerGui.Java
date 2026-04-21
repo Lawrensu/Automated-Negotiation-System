@@ -1,11 +1,13 @@
-package gui;
+package agents.broker.gui;
 
-import agents.BrokerAgent;
+
+import agents.broker.BrokerAgent;
 import java.awt.*;
 import java.awt.event.*;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.util.Map;
+
 
 public class CarBrokerGui extends JFrame {
     private BrokerAgent myAgent;
@@ -199,6 +201,24 @@ public class CarBrokerGui extends JFrame {
         bestSellerLabel.setText("Best Seller: " + bestSeller);
         statusLabel.setText("Refreshed — " + tableModel.getRowCount() + " offer(s) loaded.");
         statusLabel.setForeground(new Color(0, 100, 180));
+    }
+
+    public void removeOffer(String sellerName, String carModel) {
+    SwingUtilities.invokeLater(() -> {
+        for (int row = tableModel.getRowCount() - 1; row >= 0; row--) {
+            if (sellerName.equals(tableModel.getValueAt(row, 1)) &&
+                carModel.equals(tableModel.getValueAt(row, 2))) {
+                tableModel.removeRow(row);
+                // Re-number the # column
+                for (int i = 0; i < tableModel.getRowCount(); i++) {
+                    tableModel.setValueAt(i + 1, i, 0);
+                }
+                statusLabel.setText("Listing removed: " + carModel + " from " + sellerName);
+                statusLabel.setForeground(Color.RED);
+                break;
+             }
+            }
+        });
     }
 
     public void display() {
