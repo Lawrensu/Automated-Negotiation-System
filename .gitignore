@@ -1,4 +1,7 @@
 /bin
+/target
 
 APDescription.txt
 MTPs-Main-Container.txt
+
+.claude/

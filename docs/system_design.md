@@ -119,7 +119,7 @@ The round limit will be configurable via the GUI so it can be adjusted during te
 3. KA filters DA listings against BA's requirements
         → hard cutoffs applied first (see Matching Criteria below)
         → soft preferences used for ranking
-        → budget filter: exclude listings above ~120–130% of BA's reserve price
+        → budget filter: exclude listings above ~120–130% (Let's go with 125%) of BA's reserve price
         → sends matching listings back to BA
 
 4. BA reviews matches via GUI
