@@ -54,7 +54,7 @@ public class BuyerWindow extends JFrame {
 
 	// ── Instance state ────────────────────────────────────────────────────────
 
-	private WindowAgent           agent;
+	private volatile WindowAgent  agent; // written on JADE thread, read on EDT
 	private final Color           accent;
 	private static final Gson     GSON = new Gson();
 
@@ -431,8 +431,12 @@ public class BuyerWindow extends JFrame {
 	// ── Agent creation ────────────────────────────────────────────────────────
 
 	private void startAgent(AgentContainer container) {
+		// Set pendingWindow BEFORE createNewAgent so WindowAgent.setup() can read it.
+		// Do NOT clear it in a finally block — setup() runs asynchronously on JADE's
+		// thread after ba.start() returns, so the finally would clear it too early.
+		// setup() clears pendingWindow itself after grabbing the reference.
+		pendingWindow = this;
 		try {
-			pendingWindow = this;
 			AgentController ba = container.createNewAgent(
 					"BA1",
 					WindowAgent.class.getName(),
@@ -440,12 +444,19 @@ public class BuyerWindow extends JFrame {
 			);
 			ba.start();
 		} catch (StaleProxyException ex) {
-			ex.printStackTrace();
-			JOptionPane.showMessageDialog(this,
-					"Failed to start Buyer Agent:\n" + ex.getMessage(),
-					"Startup Error", JOptionPane.ERROR_MESSAGE);
-		} finally {
-			pendingWindow = null;
+			pendingWindow = null; // setup() will not run; clear here instead
+			String msg = ex.getMessage();
+			if (msg != null && msg.contains("Name-clash")) {
+				JOptionPane.showMessageDialog(this,
+						"A Buyer Agent is already running.\n"
+								+ "Close the existing Buyer Window before opening a new one.",
+						"Agent Already Running", JOptionPane.WARNING_MESSAGE);
+			} else {
+				JOptionPane.showMessageDialog(this,
+						"Failed to start Buyer Agent:\n" + msg,
+						"Startup Error", JOptionPane.ERROR_MESSAGE);
+			}
+			dispose(); // window is unusable without an agent — close it
 		}
 	}
 
@@ -467,6 +478,7 @@ public class BuyerWindow extends JFrame {
 		protected void setup() {
 			window        = pendingWindow;
 			pendingWindow = null;
+			if (window != null) window.agent = this; // wire back so button handlers can call agent
 			super.setup();
 		}
 

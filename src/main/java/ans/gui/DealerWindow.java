@@ -49,7 +49,7 @@ public class DealerWindow extends JFrame {
 
 	// ── Instance state ────────────────────────────────────────────────────────
 
-	private WindowAgent           agent;
+	private volatile WindowAgent  agent; // written on JADE thread, read on EDT
 	private final Color           accent;
 
 	// Listings tab model
@@ -129,8 +129,10 @@ public class DealerWindow extends JFrame {
 		form.setBorder(BorderFactory.createTitledBorder("Add Car to Inventory"));
 
 		GridBagConstraints gc = new GridBagConstraints();
-		gc.insets = new Insets(4, 6, 4, 6);
-		gc.anchor = GridBagConstraints.WEST;
+		gc.insets  = new Insets(4, 6, 4, 6);
+		gc.anchor  = GridBagConstraints.WEST;
+		gc.fill    = GridBagConstraints.HORIZONTAL;
+		gc.weightx = 1.0;
 
 		// Row 1: carId, make, model
 		JTextField carIdField    = addFormField(form, gc, 0, 0, "Car ID:");
@@ -401,8 +403,12 @@ public class DealerWindow extends JFrame {
 	// ── Agent creation ────────────────────────────────────────────────────────
 
 	private void startAgent(AgentContainer container) {
+		// Set pendingWindow BEFORE createNewAgent so WindowAgent.setup() can read it.
+		// Do NOT clear it in a finally block — setup() runs asynchronously on JADE's
+		// thread after da.start() returns, so the finally would clear it too early.
+		// setup() clears pendingWindow itself after grabbing the reference.
+		pendingWindow = this;
 		try {
-			pendingWindow = this;
 			AgentController da = container.createNewAgent(
 					"DA1",
 					WindowAgent.class.getName(),
@@ -410,12 +416,19 @@ public class DealerWindow extends JFrame {
 			);
 			da.start();
 		} catch (StaleProxyException ex) {
-			ex.printStackTrace();
-			JOptionPane.showMessageDialog(this,
-					"Failed to start Dealer Agent:\n" + ex.getMessage(),
-					"Startup Error", JOptionPane.ERROR_MESSAGE);
-		} finally {
-			pendingWindow = null;
+			pendingWindow = null; // setup() will not run; clear here instead
+			String msg = ex.getMessage();
+			if (msg != null && msg.contains("Name-clash")) {
+				JOptionPane.showMessageDialog(this,
+						"A Dealer Agent is already running.\n"
+								+ "Close the existing Dealer Window before opening a new one.",
+						"Agent Already Running", JOptionPane.WARNING_MESSAGE);
+			} else {
+				JOptionPane.showMessageDialog(this,
+						"Failed to start Dealer Agent:\n" + msg,
+						"Startup Error", JOptionPane.ERROR_MESSAGE);
+			}
+			dispose(); // window is unusable without an agent — close it
 		}
 	}
 
@@ -437,6 +450,7 @@ public class DealerWindow extends JFrame {
 		protected void setup() {
 			window        = pendingWindow;
 			pendingWindow = null;
+			if (window != null) window.agent = this; // wire back so button handlers can call agent
 			super.setup();
 		}
 
