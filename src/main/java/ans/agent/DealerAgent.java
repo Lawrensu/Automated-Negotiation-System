@@ -30,17 +30,32 @@ import jade.lang.acl.MessageTemplate;
  *
  * Responsibilities:
  *   - Register inventory with KA on startup
- *   - Accept or reject BA's first offer (floor price check)
- *   - Conduct manual price negotiation directly with BA (v1)
+ *   - Accept or decline buyer interest forwarded by KA (Phase 2)
+ *   - Conduct manual price negotiation directly with BA (Phase 3, v1)
  *
  * Floor price is stored privately and never transmitted anywhere.
  *
  * GUI interaction pattern (Step 5 wiring):
- *   - Protected notify hooks (onBuyerInterestReceived, onNegotiationOfferReceived,
- *     onNegotiationEnded) are overridden by DealerWindow to update UI.
- *   - Public response methods (submitOffer, acceptDeal, walkAway) are called
- *     by DealerWindow button handlers. They send ACL messages directly —
- *     no behaviour restart needed because behaviours wake naturally on BA's reply.
+ *   Protected hooks notify DealerWindow when messages arrive:
+ *     onBuyerInterestReceived  → show Negotiation tab with Accept / Decline buttons
+ *     onNegotiationOfferReceived → update offer history table, enable counter input
+ *     onNegotiationEnded       → show outcome dialog, reset tab
+ *
+ *   Public response methods are called by DealerWindow button handlers:
+ *     acceptBuyerInterest / declineBuyerInterest (Phase 2)
+ *     submitOffer / acceptDeal / walkAway (Phase 3)
+ *
+ *   All of these send ACL messages directly — JADE's send() is thread-safe, so
+ *   Swing EDT button handlers can call them without additional synchronisation.
+ *
+ * Phase 2 blocking design (Step 5 addition):
+ *   ReceiveBuyerInterestBehaviour blocks after calling onBuyerInterestReceived()
+ *   and waits for the human (or test agent) to call acceptBuyerInterest() or
+ *   declineBuyerInterest(). Those public methods send the response to KA, update
+ *   interestPhase, then call restart() on the behaviour to wake it.
+ *
+ *   interestPhase and pending* fields live on the outer DealerAgent so that the
+ *   public methods and the inner behaviour share state without awkward accessors.
  *
  * Migration notes (from src/agents/dealer/DealerAgent.java):
  *   - registerWithDF() and DF deregister in takeDown() carried forward unchanged.
@@ -53,7 +68,7 @@ public class DealerAgent extends Agent {
 	private static final Gson GSON = new Gson();
 
 
-	// State (technical_design.md — DealerAgent section) 
+	// ── State (technical_design.md — DealerAgent section) ────────────────────
 
 	private List<CarListing>              inventory;
 	private Map<String, Double>           floorPrices;        // carId → floor price, private
@@ -65,7 +80,32 @@ public class DealerAgent extends Agent {
 	private final Map<String, AID>        activeBuyerAIDs = new HashMap<>();
 
 
-	// Lifecycle 
+	// ── Phase 2 state (shared between ReceiveBuyerInterestBehaviour and public API) ──
+
+	/**
+	 * Three-state machine for the buyer-interest / AID-exchange phase.
+	 *
+	 *   WAITING_FOR_INTEREST    → idle, ready to receive KA forwarded interest
+	 *   WAITING_FOR_HUMAN_DECISION → hook fired, waiting for acceptBuyerInterest / declineBuyerInterest
+	 *   WAITING_FOR_AID         → human accepted, waiting for KA AID exchange confirmation
+	 */
+	private enum InterestPhase {
+		WAITING_FOR_INTEREST,
+		WAITING_FOR_HUMAN_DECISION,
+		WAITING_FOR_AID
+	}
+
+	private InterestPhase interestPhase = InterestPhase.WAITING_FOR_INTEREST;
+
+	// Pending carId — set in handleBuyerInterest(), used by handleAIDExchange()
+	private String pendingInterestCarId;
+
+	// Stored so public methods can call restart() to wake the behaviour
+	private ReceiveBuyerInterestBehaviour receiveBuyerInterestBehaviour;
+
+
+	// ── Lifecycle ────────────────────────────────────────────────────────────
+
 	@Override
 	protected void setup() {
 		inventory          = new ArrayList<>();
@@ -82,7 +122,11 @@ public class DealerAgent extends Agent {
 		registerWithDF();
 
 		addBehaviour(new RegisterListingsBehaviour());
-		addBehaviour(new ReceiveBuyerInterestBehaviour());
+
+		// Store reference so acceptBuyerInterest / declineBuyerInterest can restart it
+		receiveBuyerInterestBehaviour = new ReceiveBuyerInterestBehaviour();
+		addBehaviour(receiveBuyerInterestBehaviour);
+
 		addBehaviour(new NegotiationBehaviour());
 
 		System.out.println("[DA] " + getLocalName() + " started. Broker: " + brokerName);
@@ -93,13 +137,13 @@ public class DealerAgent extends Agent {
 		try {
 			DFService.deregister(this);
 		} catch (FIPAException fe) {
-			fe.printStackTrace();
+			System.err.println("[DA] DF deregister failed: " + fe.getMessage());
 		}
 		System.out.println("[DA] " + getLocalName() + " shutting down.");
 	}
 
 
-	// DF registration (
+	// ── DF registration ───────────────────────────────────────────────────────
 
 	private void registerWithDF() {
 		DFAgentDescription dfd = new DFAgentDescription();
@@ -111,12 +155,12 @@ public class DealerAgent extends Agent {
 		try {
 			DFService.register(this, dfd);
 		} catch (FIPAException fe) {
-			fe.printStackTrace();
+			System.err.println("[DA] DF register failed: " + fe.getMessage());
 		}
 	}
 
 
-	// Public accessors (called by DealerWindow GUI — Step 5) 
+	// ── Public API (called by DealerWindow GUI — Step 5) ────────────────────
 
 	/**
 	 * Add a car to inventory. Floor price is kept private inside DA only.
@@ -142,7 +186,37 @@ public class DealerAgent extends Agent {
 	}
 
 	/**
-	 * Human counter-offer. Called by DealerWindow's "Send Offer" button.
+	 * Accept the buyer's forwarded interest. Called by DealerWindow's "Accept" button
+	 * in Phase A of the Negotiation tab.
+	 *
+	 * Sends "accept" informDealerResponse to KA, advances interestPhase to
+	 * WAITING_FOR_AID, then restarts the behaviour so it can receive KA's AID
+	 * exchange confirmation.
+	 */
+	public void acceptBuyerInterest(String carId, String buyerAIDName) {
+		send(MessageBuilder.informDealerResponse(brokerAID, "accept", buyerAIDName, carId));
+		System.out.println("[DA] Accepted interest for " + carId + " — waiting for AID exchange.");
+		interestPhase = InterestPhase.WAITING_FOR_AID;
+		receiveBuyerInterestBehaviour.restart();
+	}
+
+	/**
+	 * Decline the buyer's forwarded interest. Called by DealerWindow's "Decline" button
+	 * in Phase A of the Negotiation tab.
+	 *
+	 * Sends "reject" informDealerResponse to KA, resets interestPhase to
+	 * WAITING_FOR_INTEREST, then restarts the behaviour so it is ready for the
+	 * next buyer interest KA might forward.
+	 */
+	public void declineBuyerInterest(String carId, String buyerAIDName) {
+		send(MessageBuilder.informDealerResponse(brokerAID, "reject", buyerAIDName, carId));
+		System.out.println("[DA] Declined interest for " + carId + ".");
+		interestPhase = InterestPhase.WAITING_FOR_INTEREST;
+		receiveBuyerInterestBehaviour.restart();
+	}
+
+	/**
+	 * Human counter-offer. Called by DealerWindow's "Send Offer" button (Phase B).
 	 * Sends a PROPOSE to BA and records the offer in NegotiationState.
 	 * The behaviour wakes naturally when BA's reply arrives.
 	 */
@@ -160,7 +234,7 @@ public class DealerAgent extends Agent {
 	}
 
 	/**
-	 * Human accepts BA's last offer. Called by DealerWindow's "Accept" button.
+	 * Human accepts BA's last offer. Called by DealerWindow's "Accept Deal" button.
 	 * Sends ACCEPT_PROPOSAL to BA and notifies KA of a closed deal.
 	 */
 	public void acceptDeal(String carId) {
@@ -200,11 +274,13 @@ public class DealerAgent extends Agent {
 	}
 
 
-	// GUI notification hooks 
+	// ── Protected notification hooks (overridden by DealerWindow in Step 5) ──
 
 	/**
-	 * Called when KA forwards buyer interest.
-	 * DealerWindow overrides this to show the Negotiation tab with buyer details.
+	 * Called when KA forwards buyer interest and the behaviour is about to block.
+	 * DealerWindow overrides this to enable the Negotiation tab and show buyer details
+	 * with Accept / Decline buttons. The subclass MUST call acceptBuyerInterest() or
+	 * declineBuyerInterest() in response — otherwise the behaviour stays blocked.
 	 */
 	protected void onBuyerInterestReceived(String carId, String buyerAIDName, Offer offer) {
 		System.out.println("[DA] Buyer interest — " + buyerAIDName
@@ -249,7 +325,7 @@ public class DealerAgent extends Agent {
 	}
 
 
-	// Behaviours 
+	// ── Behaviours ────────────────────────────────────────────────────────────
 
 	/**
 	 * Sends the current inventory to KA once on startup.
@@ -271,28 +347,27 @@ public class DealerAgent extends Agent {
 
 
 	/**
-	 * Handles two sequential INFORMs from KA per negotiation:
+	 * Handles two sequential INFORMs from KA per negotiation, with a human-decision
+	 * pause between them.
 	 *
-	 *   Phase A — WAITING_FOR_INTEREST:
+	 *   WAITING_FOR_INTEREST (Phase A):
 	 *     Receives KA INFORM with { buyerAIDName, offer }.
-	 *     If offer < floorPrice → reject immediately (edge case: first offer below floor).
-	 *     If offer >= floorPrice → accept, transition to Phase B.
+	 *     Fires onBuyerInterestReceived() hook, stores pending state, blocks.
+	 *     Does NOT send any response yet — waits for human decision.
 	 *
-	 *   Phase B — WAITING_FOR_AID:
-	 *     Receives KA INFORM with { buyerAIDName } after AID exchange.
+	 *   WAITING_FOR_HUMAN_DECISION:
+	 *     Behaviour is blocked. acceptBuyerInterest() or declineBuyerInterest()
+	 *     sends the response to KA, updates interestPhase, calls restart().
+	 *
+	 *   WAITING_FOR_AID (Phase B):
+	 *     Receives KA INFORM with { buyerAIDName } (no "offer" key) after AID exchange.
 	 *     Creates NegotiationState, sends CFP to BA at retailPrice (round 0).
-	 *     Returns to Phase A for the next buyer.
+	 *     Returns to WAITING_FOR_INTEREST for the next buyer.
 	 *
 	 * v1 is sequential — one active negotiation at a time.
 	 * Extension 1 (concurrent) will require redesigning this behaviour.
 	 */
 	private class ReceiveBuyerInterestBehaviour extends CyclicBehaviour {
-
-		private enum Phase { WAITING_FOR_INTEREST, WAITING_FOR_AID }
-
-		private Phase  phase               = Phase.WAITING_FOR_INTEREST;
-		private String pendingCarId;
-		private String pendingBuyerAIDName;
 
 		// Only receive INFORMs from KA to avoid picking up Phase 3 messages
 		private final MessageTemplate MT = MessageTemplate.and(
@@ -302,74 +377,100 @@ public class DealerAgent extends Agent {
 
 		@Override
 		public void action() {
+			// Human-decision state: hook has fired, waiting for acceptBuyerInterest /
+			// declineBuyerInterest. Those methods call restart() which will re-enter
+			// action() with interestPhase already updated to WAITING_FOR_AID or
+			// WAITING_FOR_INTEREST — so we never receive a message in this state.
+			if (interestPhase == InterestPhase.WAITING_FOR_HUMAN_DECISION) {
+				block();
+				return;
+			}
+
 			ACLMessage msg = receive(MT);
 			if (msg == null) { block(); return; }
 
-			// Payload is always a JSON object — content differs by phase
+			// Payload is always a JSON object — content differs by state
 			JsonObject payload = JsonParser.parseString(msg.getContent()).getAsJsonObject();
 
-			if (phase == Phase.WAITING_FOR_INTEREST && payload.has("offer")) {
+			if (interestPhase == InterestPhase.WAITING_FOR_INTEREST && payload.has("offer")) {
 				handleBuyerInterest(msg.getConversationId(), payload);
-			} else if (phase == Phase.WAITING_FOR_AID && !payload.has("offer")) {
+			} else if (interestPhase == InterestPhase.WAITING_FOR_AID && !payload.has("offer")) {
 				handleAIDExchange(payload);
 			}
-			// Any other INFORM from KA (e.g. during a different phase) is silently ignored
+			// Any other INFORM from KA during a mismatched phase is silently ignored
 		}
 
+		/**
+		 * Receive buyer interest from KA. Store pending state, fire hook, then either
+		 * block for human input (GUI path) or fall through immediately (test-agent path).
+		 *
+		 * The response is NOT sent here — it is sent by acceptBuyerInterest() or
+		 * declineBuyerInterest(), which are called either by DealerWindow's buttons
+		 * (asynchronously, after block()) or by a test-agent override of
+		 * onBuyerInterestReceived() (synchronously, before this method returns).
+		 *
+		 * Synchronous-call guard:
+		 *   If the hook (or a test agent subclass) calls acceptBuyerInterest() /
+		 *   declineBuyerInterest() synchronously inside onBuyerInterestReceived(),
+		 *   interestPhase is already changed to WAITING_FOR_AID or back to
+		 *   WAITING_FOR_INTEREST by the time control returns here. In that case we
+		 *   must NOT overwrite it with WAITING_FOR_HUMAN_DECISION — we just return
+		 *   without blocking. The behaviour's action() will be called again naturally
+		 *   (no block() was called, so the behaviour stays in the ready queue).
+		 */
 		private void handleBuyerInterest(String carId, JsonObject payload) {
 			String buyerAIDName = payload.get("buyerAIDName").getAsString();
 			Offer  offer        = GSON.fromJson(payload.get("offer"), Offer.class);
 
+			// Store carId on outer DealerAgent so handleAIDExchange() can read it
+			pendingInterestCarId = carId;
+
+			// Notify GUI (or test agent override)
 			onBuyerInterestReceived(carId, buyerAIDName, offer);
 
-			double floor = floorPrices.getOrDefault(carId, Double.MAX_VALUE);
-
-			if (offer.getAmount() < floor) {
-				// Edge case: first offer is already below floor price — reject immediately
-				send(MessageBuilder.informDealerResponse(
-						brokerAID, "reject", buyerAIDName, carId));
-				System.out.println("[DA] Rejected interest for " + carId
-						+ " (RM " + offer.getAmount() + " < floor RM " + floor + ")");
-			} else {
-				send(MessageBuilder.informDealerResponse(
-						brokerAID, "accept", buyerAIDName, carId));
-				System.out.println("[DA] Accepted interest for " + carId
-						+ " — waiting for AID exchange.");
-				pendingCarId        = carId;
-				pendingBuyerAIDName = buyerAIDName;
-				phase               = Phase.WAITING_FOR_AID;
+			// If onBuyerInterestReceived() already called accept/declineBuyerInterest()
+			// synchronously, interestPhase is no longer WAITING_FOR_INTEREST — don't block.
+			if (interestPhase == InterestPhase.WAITING_FOR_INTEREST) {
+				// GUI path: human hasn't decided yet — block until button click
+				interestPhase = InterestPhase.WAITING_FOR_HUMAN_DECISION;
+				block();
 			}
+			// Test-agent / synchronous path: fall through; action() continues next cycle
 		}
 
+		/**
+		 * KA has confirmed AID exchange. Create NegotiationState, send CFP to BA at
+		 * retailPrice (round 0). Reset to WAITING_FOR_INTEREST for the next buyer.
+		 */
 		private void handleAIDExchange(JsonObject payload) {
-			// KA has confirmed AID exchange — payload contains buyerAIDName
 			String buyerAIDName = payload.get("buyerAIDName").getAsString();
 			AID    buyerAID     = new AID(buyerAIDName, AID.ISLOCALNAME);
-			activeBuyerAIDs.put(pendingCarId, buyerAID);
+			activeBuyerAIDs.put(pendingInterestCarId, buyerAID);
 
-			CarListing listing = findListing(pendingCarId);
+			CarListing listing = findListing(pendingInterestCarId);
 			if (listing == null) {
-				System.err.println("[DA] Error: listing not found for carId " + pendingCarId);
-				phase = Phase.WAITING_FOR_INTEREST;
+				System.err.println("[DA] Error: listing not found for carId "
+						+ pendingInterestCarId);
+				interestPhase = InterestPhase.WAITING_FOR_INTEREST;
 				return;
 			}
 
 			int    maxRounds  = Config.getInt("negotiation.maxRounds");
-			double floorPrice = floorPrices.get(pendingCarId);
+			double floorPrice = floorPrices.get(pendingInterestCarId);
 
 			NegotiationState state = new NegotiationState(
-					pendingCarId, maxRounds,
+					pendingInterestCarId, maxRounds,
 					listing.getRetailPrice(), floorPrice, alpha);
-			activeNegotiations.put(pendingCarId, state);
+			activeNegotiations.put(pendingInterestCarId, state);
 
 			// DA opens negotiation at retailPrice, round 0 (technical_design.md Phase 3)
-			Offer cfp = new Offer(pendingCarId, listing.getRetailPrice(), 0,
+			Offer cfp = new Offer(pendingInterestCarId, listing.getRetailPrice(), 0,
 					getLocalName(), false);
 			send(MessageBuilder.cfpOffer(buyerAID, cfp));
 			System.out.println("[DA] CFP sent to " + buyerAIDName
-					+ " — RM " + listing.getRetailPrice() + " for " + pendingCarId);
+					+ " — RM " + listing.getRetailPrice() + " for " + pendingInterestCarId);
 
-			phase = Phase.WAITING_FOR_INTEREST; // ready for next buyer interest
+			interestPhase = InterestPhase.WAITING_FOR_INTEREST; // ready for next buyer interest
 		}
 	}
 
@@ -378,7 +479,7 @@ public class DealerAgent extends Agent {
 	 * Handles Phase 3: the direct offer loop between DA and BA.
 	 *
 	 * Receives from BA:
-	 *   PROPOSE       → new counter-offer from BA; notify GUI and block until human responds
+	 *   PROPOSE         → new counter-offer from BA; notify GUI and block until human responds
 	 *   ACCEPT_PROPOSAL → BA accepted DA's last offer; close deal, notify KA
 	 *   REJECT_PROPOSAL → BA walked away; notify KA
 	 *
@@ -404,9 +505,9 @@ public class DealerAgent extends Agent {
 			ACLMessage msg = receive(MT);
 			if (msg == null) { block(); return; }
 
-			Offer            offer  = GSON.fromJson(msg.getContent(), Offer.class);
-			String           carId  = msg.getConversationId();
-			NegotiationState state  = activeNegotiations.get(carId);
+			Offer            offer = GSON.fromJson(msg.getContent(), Offer.class);
+			String           carId = msg.getConversationId();
+			NegotiationState state = activeNegotiations.get(carId);
 
 			// Stale message for a negotiation that has already ended — discard
 			if (state == null) return;
@@ -432,10 +533,9 @@ public class DealerAgent extends Agent {
 					}
 
 					// Display the incoming offer via GUI hook; human responds using
-					// submitOffer(), acceptDeal(), or walkAway() from DealerWindow
+					// submitOffer(), acceptDeal(), or walkAway() from DealerWindow.
+					// NegotiationBehaviour wakes naturally when BA's next message arrives.
 					onNegotiationOfferReceived(carId, offer);
-					// Block until BA's next message arrives (natural JADE pattern —
-					// no manual restart needed since BA replies after human action)
 					block();
 				}
 

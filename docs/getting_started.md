@@ -14,18 +14,12 @@
 
 ## First-time JADE setup (run once, any IDE)
 
-JADE is not published on Maven Central, so you need to register it with your local Maven
-repository once before the build system can resolve it.
+JADE is not published on Maven Central, so you need to register it with your local Maven repository once before the build system can resolve it.
 
 **Step 1 : Register JADE in your local Maven repository:**
 
 ```bash
-mvn install:install-file \
-	-Dfile=lib/jade.jar \
-	-DgroupId=com.tilab.jade \
-	-DartifactId=jade \
-	-Dversion=4.6.0 \
-	-Dpackaging=jar
+mvn install:install-file "-Dfile=lib/jade.jar" "-DgroupId=com.tilab.jade" "-DartifactId=jade" "-Dversion=4.6.0" "-Dpackaging=jar"
 ```
 
 **Step 2 : Update the JADE dependency scope in `pom.xml`:**
@@ -83,7 +77,7 @@ Use the Maven sidebar (`M` icon on the left) → **Lifecycle → compile**, or r
 integrated terminal:
 
 ```bash
-mvn compile
+mvn clean compile
 ```
 
 
@@ -118,7 +112,7 @@ Open the **Maven panel** (right side of the IDE) → **Lifecycle → compile**, 
 the terminal:
 
 ```bash
-mvn compile
+mvn clean compile
 ```
 
 

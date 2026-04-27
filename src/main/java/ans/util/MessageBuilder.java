@@ -108,11 +108,18 @@ public class MessageBuilder {
 		return msg;
 	}
 
-	/** KA → BA: provide the matched dealer's AID name so BA can contact DA directly. */
+	/**
+	 * KA → BA: provide the matched dealer's AID name so BA can send directly.
+	 *
+	 * Ontology "aid-exchange" disambiguates this from informMatches (convId
+	 * "buyer-search") and informNoDealerEngaged (ontology "no-dealer-engaged"),
+	 * both of which BA also receives as INFORM from the broker.
+	 */
 	public static ACLMessage informDealerAID(AID receiver, String dealerAIDName, String carId) {
 		ACLMessage msg = new ACLMessage(ACLMessage.INFORM);
 		msg.addReceiver(receiver);
 		msg.setConversationId(carId);
+		msg.setOntology("aid-exchange");
 		JsonObject payload = new JsonObject();
 		payload.addProperty("dealerAIDName", dealerAIDName);
 		msg.setContent(payload.toString());

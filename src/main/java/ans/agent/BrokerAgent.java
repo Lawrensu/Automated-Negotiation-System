@@ -427,7 +427,10 @@ public class BrokerAgent extends Agent {
 	private List<CarListing> findAndRankMatches(BuyerRequirements req) {
 		List<ScoredListing> scored = new ArrayList<>();
 
-		for (List<CarListing> listings : dealerListings.values()) {
+		for (Map.Entry<String, List<CarListing>> entry : dealerListings.entrySet()) {
+			String           dealerName = entry.getKey();
+			List<CarListing> listings   = entry.getValue();
+
 			for (CarListing listing : listings) {
 
 				// Step 1 — hard cutoffs
@@ -446,6 +449,10 @@ public class BrokerAgent extends Agent {
 						&& req.getPreferredColour().equalsIgnoreCase(listing.getColour())) {
 					score += 1;
 				}
+
+				// Stamp the dealer name so BA can build its shortlist Map without
+				// needing to infer the dealer from carId string conventions.
+				listing.setDealerAIDName(dealerName);
 
 				scored.add(new ScoredListing(listing, score));
 			}
