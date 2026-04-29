@@ -69,7 +69,11 @@ public class DealerWindow extends JFrame {
 	private JLabel                roundLabel;
 	private DefaultTableModel     offerHistoryModel;
 	private JTextField            counterField;
+	private JButton               sendCounterBtn;
 
+	//Auto-incrementation of Car ID
+	private int carCounter = 1;
+	private JTextField carIdField;
 
 	// ── Constructor ───────────────────────────────────────────────────────────
 
@@ -123,6 +127,11 @@ public class DealerWindow extends JFrame {
 		return panel;
 	}
 
+	private String getNextCarId() {
+    String prefix = (agent != null) ? agent.getLocalName() : "DA";
+    return prefix + "-" + String.format("%03d", carCounter);
+	}
+
 	private JPanel buildAddCarForm() {
 		JPanel form = new JPanel(new GridBagLayout());
 		form.setBackground(Color.WHITE);
@@ -135,7 +144,22 @@ public class DealerWindow extends JFrame {
 		gc.weightx = 1.0;
 
 		// Row 1: carId, make, model
-		JTextField carIdField    = addFormField(form, gc, 0, 0, "Car ID:");
+		carIdField = new JTextField(9);
+		carIdField.setEditable(false);  // Makes it read-only (greyed out)
+		carIdField.setFocusable(false); // Stops the user from clicking into it
+
+		// Explicitly tell Swing to put this in Row 0, Column 0
+		gc.gridwidth = 1;
+		gc.gridx = 0; 
+		gc.gridy = 0; 
+		gc.weightx = 0.0;
+		form.add(new JLabel("Car ID:"), gc);
+
+		// Put the text field right next to it in Column 1
+		gc.gridx = 1; 
+		gc.weightx = 1.0;
+		form.add(carIdField, gc);
+
 		JTextField makeField     = addFormField(form, gc, 1, 0, "Make:");
 		JTextField modelField    = addFormField(form, gc, 2, 0, "Model:");
 
@@ -179,11 +203,16 @@ public class DealerWindow extends JFrame {
 				});
 
 				// Clear fields after successful add
-				for (JTextField f : new JTextField[]{carIdField, makeField, modelField,
+				for (JTextField f : new JTextField[]{makeField, modelField,
 						yearField, mileageField, colourField, conditionField,
 						retailPriceField, floorPriceField}) {
 					f.setText("");
 				}
+
+				//Increment the counter and put the NEXT ID into the field
+				carCounter++;
+				carIdField.setText(getNextCarId());
+
 			} catch (NumberFormatException ex) {
 				JOptionPane.showMessageDialog(DealerWindow.this,
 						"Year, Mileage, Retail Price, and Floor Price must be numbers.",
@@ -213,10 +242,12 @@ public class DealerWindow extends JFrame {
 		gc.gridwidth = 1;
 		gc.gridx = col * 2;
 		gc.gridy = row;
+		gc.weightx = 0.0;
 		form.add(new JLabel(label), gc);
 
 		JTextField field = new JTextField(10);
 		gc.gridx = col * 2 + 1;
+		gc.weightx = 1.0;
 		form.add(field, gc);
 		return field;
 	}
@@ -256,11 +287,18 @@ public class DealerWindow extends JFrame {
 
 		acceptBtn.addActionListener(e -> {
 			if (agent != null && activeCarId != null) {
+				acceptBtn.setEnabled(false);
+        		declineBtn.setEnabled(false);
+
 				agent.acceptBuyerInterest(activeCarId, activeBuyerAIDName);
+				showPhase("PHASE_B");
 			}
 		});
 		declineBtn.addActionListener(e -> {
 			if (agent != null && activeCarId != null) {
+				acceptBtn.setEnabled(false);
+        		declineBtn.setEnabled(false);
+
 				agent.declineBuyerInterest(activeCarId, activeBuyerAIDName);
 				resetNegotiationTab();
 			}
@@ -298,17 +336,24 @@ public class DealerWindow extends JFrame {
 
 		counterField = new JTextField(10);
 		counterField.setFont(new Font("Monospaced", Font.PLAIN, 13));
+		counterField.setEnabled(false);
 
-		JButton counterBtn  = makeButton("Send Counter");
+		sendCounterBtn = makeButton("Send Counter");
+		sendCounterBtn.setEnabled(false);
 		JButton acceptBtn   = makeButton("Accept Deal");
 		JButton walkAwayBtn = makeButton("Walk Away");
 
-		counterBtn.addActionListener(e -> {
+		sendCounterBtn.addActionListener(e -> {
 			if (agent == null || activeCarId == null) return;
 			try {
 				double amount = Double.parseDouble(counterField.getText().trim());
 				agent.submitOffer(activeCarId, amount);
 				counterField.setText("");
+				
+				// NEW: Lock the UI so they have to wait for the buyer's turn!
+				counterField.setEnabled(false);
+				sendCounterBtn.setEnabled(false);
+				
 			} catch (NumberFormatException ex) {
 				JOptionPane.showMessageDialog(DealerWindow.this,
 						"Enter a valid number for the counter-offer.",
@@ -317,6 +362,7 @@ public class DealerWindow extends JFrame {
 		});
 		acceptBtn.addActionListener(e -> {
 			if (agent != null && activeCarId != null) agent.acceptDeal(activeCarId);
+			tabbedPane.setSelectedIndex(1);
 		});
 		walkAwayBtn.addActionListener(e -> {
 			if (agent != null && activeCarId != null) agent.walkAway(activeCarId);
@@ -324,7 +370,7 @@ public class DealerWindow extends JFrame {
 
 		inputRow.add(new JLabel("Counter offer (RM):"));
 		inputRow.add(counterField);
-		inputRow.add(counterBtn);
+		inputRow.add(sendCounterBtn);
 		inputRow.add(acceptBtn);
 		inputRow.add(walkAwayBtn);
 		panel.add(inputRow, BorderLayout.SOUTH);
@@ -357,6 +403,9 @@ public class DealerWindow extends JFrame {
 				offer.getRound(), offer.getFromAgentId(),
 				String.format("%.2f", offer.getAmount())
 		});
+
+		if (counterField != null) counterField.setEnabled(true);
+		if (sendCounterBtn != null) sendCounterBtn.setEnabled(true); 
 	}
 
 	/** Called when a negotiation ends (deal or failure). Resets tab. */
@@ -367,6 +416,17 @@ public class DealerWindow extends JFrame {
 		JOptionPane.showMessageDialog(this, msg,
 				dealReached ? "Deal Closed" : "No Deal",
 				dealReached ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE);
+
+		if (dealReached && listingsModel != null) {
+			for (int i = 0; i < listingsModel.getRowCount(); i++) {
+				// Column 0 is the "Car ID" column
+				if (listingsModel.getValueAt(i, 0).equals(carId)) {
+					listingsModel.removeRow(i);
+					break; // Stop searching once we find and delete it
+				}
+			}
+		}
+
 		resetNegotiationTab();
 	}
 
@@ -450,7 +510,14 @@ public class DealerWindow extends JFrame {
 		protected void setup() {
 			window        = pendingWindow;
 			pendingWindow = null;
-			if (window != null) window.agent = this; // wire back so button handlers can call agent
+			if (window != null) {
+				window.agent = this; // wire back so button handlers can call agent
+				
+				// NEW: Tell the UI what the agent's name is to pre-fill the first ID!
+				SwingUtilities.invokeLater(() -> 
+					window.carIdField.setText(window.getNextCarId())
+				);
+			}
 			super.setup();
 		}
 

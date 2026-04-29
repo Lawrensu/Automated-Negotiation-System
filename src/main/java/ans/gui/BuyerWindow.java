@@ -69,6 +69,7 @@ public class BuyerWindow extends JFrame {
 	private JLabel                roundLabel;
 	private DefaultTableModel     offerHistoryModel;
 	private JTextField            counterField;
+	private JButton               counterBtn;
 
 
 	// ── Constructor ───────────────────────────────────────────────────────────
@@ -172,14 +173,18 @@ public class BuyerWindow extends JFrame {
 
 		// Reserve price on its own row — labelled as private to BA
 		gc.gridx = 0; gc.gridy = 3; gc.gridwidth = 1;
+		gc.weightx = 0.0; // Reset weightx for the label
 		form.add(new JLabel("Reserve Price (RM, private):"), gc);
+
 		JTextField reservePriceField = new JTextField(10);
 		gc.gridx = 1; gc.gridy = 3;
+		gc.weightx = 1.0; // Tell reserve price field to stretch
 		form.add(reservePriceField, gc);
 
 		// Search button
 		JButton searchBtn = makeButton("Search");
 		gc.gridx = 2; gc.gridy = 3; gc.gridwidth = 1;
+		gc.weightx = 0.0; // Reset weightx for the button
 		form.add(searchBtn, gc);
 
 		searchBtn.addActionListener(e -> {
@@ -216,15 +221,18 @@ public class BuyerWindow extends JFrame {
 	}
 
 	private JTextField addFormField(JPanel form, GridBagConstraints gc,
-	                                int col, int row, String label) {
-		gc.gridwidth = 1;
-		gc.gridx = col * 2;
-		gc.gridy = row;
-		form.add(new JLabel(label), gc);
-		JTextField field = new JTextField(9);
-		gc.gridx = col * 2 + 1;
-		form.add(field, gc);
-		return field;
+                                int col, int row, String label) {
+    gc.gridwidth = 1;
+    gc.gridx = col * 2;
+    gc.gridy = row;
+    gc.weightx = 0.0; // Ensure label doesn't stretch
+    form.add(new JLabel(label), gc);
+    
+    JTextField field = new JTextField(9);
+    gc.gridx = col * 2 + 1;
+    gc.weightx = 1.0; // Tell text field to absorb extra width
+    form.add(field, gc);
+    return field;
 	}
 
 	/**
@@ -319,7 +327,11 @@ public class BuyerWindow extends JFrame {
 		counterField = new JTextField(10);
 		counterField.setFont(new Font("Monospaced", Font.PLAIN, 13));
 
-		JButton counterBtn  = makeButton("Counter");
+		counterBtn = makeButton("Counter");
+
+		counterField.setEnabled(false);
+		counterBtn.setEnabled(false);
+
 		JButton acceptBtn   = makeButton("Accept");
 		JButton walkAwayBtn = makeButton("Walk Away");
 
@@ -329,6 +341,10 @@ public class BuyerWindow extends JFrame {
 				double amount = Double.parseDouble(counterField.getText().trim());
 				agent.submitOffer(activeCarId, amount);
 				counterField.setText("");
+
+				counterField.setEnabled(false);
+        		counterBtn.setEnabled(false);
+
 			} catch (NumberFormatException ex) {
 				JOptionPane.showMessageDialog(BuyerWindow.this,
 						"Enter a valid number for the counter-offer.",
@@ -396,6 +412,9 @@ public class BuyerWindow extends JFrame {
 				offer.getRound(), offer.getFromAgentId(),
 				String.format("%.2f", offer.getAmount())
 		});
+
+		if (counterField != null) counterField.setEnabled(true);
+	    if (counterBtn != null) counterBtn.setEnabled(true);
 	}
 
 	/** Called when negotiation ends. Resets tab. */
@@ -406,6 +425,28 @@ public class BuyerWindow extends JFrame {
 		JOptionPane.showMessageDialog(this, msg,
 				dealReached ? "Deal Closed" : "No Deal",
 				dealReached ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE);
+
+		//Clean up search results
+		if (resultsModel != null) {
+			for (int i = 0; i < resultsModel.getRowCount(); i++) {
+				// Column 1 is the "Car ID" column in the Buyer search table
+				if (resultsModel.getValueAt(i, 1).equals(carId)) {
+					if (dealReached) {
+						// If sold, remove it from the table AND the backing list
+						resultsModel.removeRow(i);
+						if (lastMatches != null && i < lastMatches.size()) {
+							lastMatches.remove(i);
+						}
+					} else {
+						// If failed, just uncheck it and reset its rank
+						resultsModel.setValueAt(Boolean.FALSE, i, 10); // Column 10 is 'Select'
+						resultsModel.setValueAt(1, i, 11);             // Column 11 is 'Rank'
+					}
+					break; // We found the car, stop looping
+				}
+			}
+		}
+
 		// Reset
 		activeCarId = null;
 		if (offerHistoryModel != null) offerHistoryModel.setRowCount(0);
