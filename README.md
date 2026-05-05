@@ -6,8 +6,8 @@ This documentation serves to describe the design and the implementation of the A
 1. [Project Overview](docs/project_overview.md)
 2. [Getting Started](docs/getting_started.md)
 3. [Development Convention](docs/development_convention.md)
-4. [Architecture/System Design](docs/system_design.md)
-5. [Architecture/Techhnical Design](docs/technical_design.md)
+4. [Architecture/System Design](docs/system_design/system_design.md)
+5. [Architecture/Techhnical Design](docs/system_design/technical_design.md)
 
 ---
 
