@@ -24,6 +24,7 @@ mvn exec:java "-Dexec.mainClass=ans.Main"
 4. Click **Search** — results appear
 5. Select the car that was added by the dealer
 6. Click **Send Shortlist to KA (Auto-Negotiate)**
+7. Choose your strategy type (Boulware, Linear and Conceder)
 
 ### Step 4: Watch Automated Negotiation
 
