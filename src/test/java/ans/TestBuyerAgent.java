@@ -73,7 +73,7 @@ public class TestBuyerAgent extends BuyerAgent {
 
 	/** Auto-respond to DA's CFP / PROPOSE: accept if within reserve, else counter. */
 	@Override
-	protected void onNegotiationOfferReceived(String carId, Offer offer) {
+	protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 		super.onNegotiationOfferReceived(carId, offer); // console log
 		if (offer.getAmount() <= RESERVE_PRICE) {
 			System.out.println("[TEST-BA] Offer RM" + offer.getAmount()
@@ -85,6 +85,7 @@ public class TestBuyerAgent extends BuyerAgent {
 					+ " above reserve — countering at RM" + counter);
 			submitOffer(carId, counter);
 		}
+		return true; // handled autonomously — tell NegotiationBehaviour not to block for user input
 	}
 
 	// ── Helpers ──────────────────────────────────────────────────────────────
