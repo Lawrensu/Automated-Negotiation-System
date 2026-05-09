@@ -547,10 +547,10 @@ public class BuyerWindow extends JFrame {
 		@Override
 		protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 			super.onNegotiationOfferReceived(carId, offer); // console log
-			if (window == null) {
+			if (window != null) {
 				SwingUtilities.invokeLater(() -> window.showOffer(carId, offer));
 			}
-			return false; // manual handling by GUI — tell NegotiationBehaviour not to block for user input (since GUI will prompt user)
+			return false; // manual handling by GUI — tell NegotiationBehaviour to block for user input
 		}
 
 		@Override

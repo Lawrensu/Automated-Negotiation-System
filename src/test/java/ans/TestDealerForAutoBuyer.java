@@ -31,15 +31,16 @@ public class TestDealerForAutoBuyer extends DealerAgent {
         }
     }
 
-    @Override
-    protected void onNegotiationOfferReceived(String carId, Offer offer) {
-        super.onNegotiationOfferReceived(carId, offer);
-        if (offer.getAmount() >= DA_ACCEPT_THRESHOLD) {
-            acceptDeal(carId);
-        } else {
-            submitOffer(carId, offer.getAmount() + 1_000.0);
-        }
-    }
+	@Override
+	protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
+		super.onNegotiationOfferReceived(carId, offer);
+		if (offer.getAmount() >= DA_ACCEPT_THRESHOLD) {
+			acceptDeal(carId);
+		} else {
+			submitOffer(carId, offer.getAmount() + 1_000.0);
+		}
+		return true; // handled autonomously — don't block
+	}
 
     private static CarListing buildTestCar() {
         CarListing c = new CarListing();

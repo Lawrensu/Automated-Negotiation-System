@@ -147,6 +147,7 @@ public class DealerWindow extends JFrame {
 		carIdField = new JTextField(9);
 		carIdField.setEditable(false);  // Makes it read-only (greyed out)
 		carIdField.setFocusable(false); // Stops the user from clicking into it
+		carIdField.setText(getNextCarId()); // pre-fill first ID; WindowAgent updates to real agent name
 
 		// Explicitly tell Swing to put this in Row 0, Column 0
 		gc.gridwidth = 1;
@@ -182,8 +183,16 @@ public class DealerWindow extends JFrame {
 
 		addBtn.addActionListener(e -> {
 			try {
+				String carId = carIdField.getText().trim();
+				if (carId.isEmpty()) {
+					JOptionPane.showMessageDialog(DealerWindow.this,
+							"Car ID is empty — wait for agent initialisation or type an ID.",
+							"Input Error", JOptionPane.WARNING_MESSAGE);
+					return;
+				}
+
 				CarListing listing = new CarListing();
-				listing.setCarId(carIdField.getText().trim());
+				listing.setCarId(carId);
 				listing.setMake(makeField.getText().trim());
 				listing.setModel(modelField.getText().trim());
 				listing.setYear(Integer.parseInt(yearField.getText().trim()));
@@ -530,11 +539,12 @@ public class DealerWindow extends JFrame {
 		}
 
 		@Override
-		protected void onNegotiationOfferReceived(String carId, Offer offer) {
+		protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 			super.onNegotiationOfferReceived(carId, offer); // console log
-			if (window == null) return;
+			if (window == null) return false;
 			SwingUtilities.invokeLater(() ->
 					window.showNegotiationOffer(carId, offer));
+			return false; // manual mode — tell NegotiationBehaviour to block for human input
 		}
 
 		@Override

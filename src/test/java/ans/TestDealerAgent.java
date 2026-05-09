@@ -68,7 +68,7 @@ public class TestDealerAgent extends DealerAgent {
 
 	/** Auto-respond to BA's PROPOSE: accept if offer meets threshold, else counter. */
 	@Override
-	protected void onNegotiationOfferReceived(String carId, Offer offer) {
+	protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 		super.onNegotiationOfferReceived(carId, offer); // console log
 		if (offer.getAmount() >= DA_ACCEPT_THRESHOLD) {
 			System.out.println("[TEST-DA] Offer RM" + offer.getAmount()
@@ -80,6 +80,7 @@ public class TestDealerAgent extends DealerAgent {
 					+ " below threshold — countering at RM" + counter);
 			submitOffer(carId, counter);
 		}
+		return true; // handled autonomously — don't block
 	}
 
 

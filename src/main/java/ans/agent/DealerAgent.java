@@ -292,9 +292,19 @@ public class DealerAgent extends Agent {
 	 * DealerWindow overrides this to update the offer history table and prompt
 	 * the human to respond.
 	 */
-	protected void onNegotiationOfferReceived(String carId, Offer offer) {
+	/**
+	 * Called when an offer arrives from BA during negotiation.
+	 * DealerWindow overrides this to update the offer history table and prompt
+	 * the human to respond.
+	 *
+	 * @return false to tell NegotiationBehaviour to block and wait for
+	 *         the human to respond via submitOffer/acceptDeal/walkAway.
+	 *         Auto-dealer overrides return true after responding autonomously.
+	 */
+	protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 		System.out.println("[DA] Incoming offer: RM " + offer.getAmount()
 				+ " for " + carId + " (round " + offer.getRound() + ")");
+		return false; // manual mode: block and wait for human
 	}
 
 	/**
@@ -534,9 +544,12 @@ public class DealerAgent extends Agent {
 
 					// Display the incoming offer via GUI hook; human responds using
 					// submitOffer(), acceptDeal(), or walkAway() from DealerWindow.
-					// NegotiationBehaviour wakes naturally when BA's next message arrives.
-					onNegotiationOfferReceived(carId, offer);
-					block();
+					// Auto-dealer overrides return true after responding so we skip
+					// the block and fall through.
+					boolean handled = onNegotiationOfferReceived(carId, offer);
+					if (!handled) {
+						block();
+					}
 				}
 
 				case ACLMessage.ACCEPT_PROPOSAL -> {
