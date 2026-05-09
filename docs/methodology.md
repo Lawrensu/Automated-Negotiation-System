@@ -1,8 +1,8 @@
 # Methodology
 
-This document records the design choices made for the Automated Negotiation System and the
-justifications for each. It is intended to defend implementation decisions against academic
-review and to guide the team in v2 and extension development.
+This document records the design choices made for the Automated Negotiation System and the justifications for each. It is intended to defend implementation decisions against academic review and to serve as the primary reference for writing the project report.
+
+Sections 1–6 cover foundational and v1 decisions. Sections 7–9 cover v2 additions. Section 10 covers Extension 1.
 
 ---
 
@@ -324,3 +324,190 @@ gui.accentColour=#1E3A5F       # Accent colour applied across all Swing windows
   runs unless scripted
 - *Database config table:* introduces a persistence dependency unwarranted for a
   single-machine prototype
+
+---
+
+## 7. Concession Strategy — Faratin Time-Based Formula (v2)
+
+### Choice: Faratin et al. (1998) Time-Based Concession
+
+**Chosen because:**
+- Directly referenced in course lecture materials; using it demonstrates engagement with
+  the academic content of the unit
+- Round-based: maps cleanly to the system's existing round-limit design; `t` and `T`
+  are already tracked in `NegotiationState`
+- Single parameter `α` controls the full concession personality (Conceder / Linear /
+  Boulware) without requiring multiple tuning values
+- The resulting concession curves are easy to graph and analyse in the project report,
+  which requires a critical analysis section
+
+**Formula:**
+```
+factor(t, T, α) = ( t / T ) ^ ( 1 / α )
+
+DA offer at round t = floorPrice + (retailPrice − floorPrice) × (1 − factor)
+BA offer at round t = firstOffer + (reservePrice − firstOffer) × factor
+```
+
+**α parameter design decision:**
+- DA default α = 0.7 (Conceder-leaning): per Dr. Lee's directive that the dealer should
+  push to shorten negotiation time. A conceder-leaning DA makes larger early concessions,
+  signalling deal attractiveness and creating incentive for BA to accept sooner.
+- BA default α = 1.0 (Linear): neutral starting point; configurable via GUI before each
+  negotiation to enable controlled experiments.
+- Both α values are locked during a negotiation once it starts, and are configurable
+  before each negotiation via the GUI.
+
+**Alternatives rejected:**
+
+| Alternative | Reason Rejected |
+|---|---|
+| Fixed step concession (offer − constant) | Does not account for deadline pressure; agent behaves identically at round 1 and round 19; no urgency signal |
+| Random concession | Non-reproducible; cannot produce clean concession curves for report analysis |
+| Multi-issue utility function (e.g. Nash bargaining) | Requires multi-attribute negotiation, which is Extension 2 (not chosen); adds complexity with no benefit for price-only negotiation |
+
+**References:**
+- Faratin, P., Sierra, C., and Jennings, N. R. (1998). Negotiation Decision Functions for
+  Autonomous Agents. *International Journal of Robotics and Autonomous Systems*, 24(3–4), 159–182.
+
+---
+
+## 8. Prediction Algorithm — Linear Regression on Offer History (v2)
+
+### Choice: Real-Time Linear Regression on Opponent Offer Sequence
+
+**Chosen because:**
+- The project report explicitly requires "Implemented prediction algorithm/s"; regression
+  directly satisfies this requirement
+- Requires zero training data: the regressor fits in real time using only the offers
+  exchanged in the current negotiation
+- Interpretable: slope and predicted limit are explainable in plain language and
+  graphable alongside the concession curves in the report
+- Lightweight: computable in 6 lines of arithmetic (slope = Σ(xi−x̄)(yi−ȳ) / Σ(xi−x̄)²,
+  intercept = ȳ − slope×x̄); no library dependency required
+
+**How it works:**
+- `x` = round number, `y` = opponent offer at that round
+- Fits a least-squares line `y = a + bx` to the opponent's offer history
+- Extrapolates to round `T` to estimate the opponent's likely limit at the deadline
+- Used to enhance the accept condition: if the predicted opponent limit has crossed the
+  agent's own current Faratin offer, accept now rather than waiting for further rounds
+
+**Reliability gates (all three must pass before prediction is used):**
+
+| Gate | Parameter | Default | Purpose |
+|---|---|---|---|
+| Minimum data | `negotiation.regressionMinPoints` | 3 | Too few points makes regression meaningless |
+| R² threshold | `negotiation.regressionMinR2` | 0.80 | Low R² means noisy/non-linear data; prediction unreliable |
+| Slope threshold | `negotiation.boulwareSlopeThreshold` | 50.0 RM/round | Near-zero slope means opponent is Boulware; regression mistakes "not moving yet" for "nearly at limit" |
+
+**Boulware bias handling:**
+A Boulware opponent holds near their opening offer for most rounds. Naive regression on
+their flat offer sequence would predict their current offer as their limit, causing the
+observing agent to over-concede. When the slope gate fails (Boulware detected), the
+prediction is suppressed entirely and the agent falls back to the base Faratin strategy.
+This is the correct rational response: hold position and wait for the opponent's
+late-round movement.
+
+**Bounds clamping:**
+The predicted value is clamped to the physically possible range (opponent's first
+observed offer as the outer bound) to prevent nonsensical extrapolations.
+
+**No-overlap early exit:**
+When both agents' regression predictions are reliable and the predicted DA limit exceeds
+the predicted BA limit, a deal is mathematically impossible. The agent walks away early
+rather than grinding to the round limit. This is demonstrable in the report's critical
+analysis section.
+
+**Alternatives rejected:**
+
+| Alternative | Reason Rejected |
+|---|---|
+| Machine learning (neural network, random forest) | Requires labelled historical training data that does not exist prior to deployment; training pipeline adds infrastructure complexity disproportionate to scope |
+| Moving average | Smooths noise but does not extrapolate; cannot predict where offers are heading, only where they have been |
+| No prediction (Faratin base only) | Satisfies the strategy requirement but not the prediction requirement; misses the opportunity to demonstrate analytical capability |
+
+---
+
+## 9. Dealer Shortening Strategy (v2)
+
+### Choice: Conceder-Leaning α with Regression-Driven Early Commitment
+
+Per Dr. Lee's directive, the dealer agent is designed to push toward faster deal closure
+rather than passively conceding toward the deadline. Three mechanisms implement this:
+
+**Mechanism 1 — Conceder-leaning α (default 0.7):**
+A conceder DA makes larger concessions in early rounds. From BA's perspective, the
+dealer is visibly moving, which creates an incentive to accept before the best offer
+passes. This is the primary mechanism and is controlled entirely by the α parameter.
+
+**Mechanism 2 — Regression-driven final commitment:**
+When the regression predictor estimates that BA's ceiling is within
+`negotiation.bestOfferThreshold` (default RM500) of DA's current Faratin offer,
+DA makes one aggressive final move to just above the predicted BA ceiling rather than
+continuing incremental concessions. This collapses the remaining gap in one step.
+
+**Mechanism 3 — Early walk-away on predicted no-overlap:**
+If regression predicts BA will never reach DA's floor price, DA exits early. This saves
+pointless rounds when a deal is impossible.
+
+**Report framing:**
+In the report, DA's regression is framed as a *negotiation strategy* (not the prediction
+algorithm). BA's regression is the *prediction algorithm* satisfying the report
+requirement. Both use the same `RegressionPredictor` class — the distinction is framing,
+not implementation.
+
+---
+
+## 10. Extension 1 — Concurrent Negotiations
+
+### Choice: Concurrent over Multi-Attribute Negotiation
+
+**Extension 1 chosen because:**
+- The team's engineering strength is in the multi-agent protocol and concurrency design,
+  not in utility function modelling or preference elicitation
+- Concurrent negotiations produce measurable outcomes (which deal closes first, how many
+  rounds, fee distribution) that are directly comparable and reportable
+- The concurrency model extends the existing v2 design cleanly: same Faratin formula,
+  same regression predictor, just multiple independent instances per BA
+
+**Multi-attribute (Extension 2) rejected because:**
+- Requires a utility function over car attributes (make, year, mileage, colour, condition)
+  whose weights are subjective and hard to validate academically
+- Adds preference elicitation complexity to the GUI that is disproportionate to the
+  time available before submission
+
+### Why No Machine Learning (repeated for extension context)
+
+The team considered ML prediction as an alternative to linear regression, particularly
+for predicting opponent strategy type (Boulware vs Conceder) from early offer patterns.
+This was declined for two reasons:
+
+1. The selected extension (concurrent negotiations) introduces substantial engineering
+   complexity in protocol design and concurrent state management. This is the primary
+   research contribution. Adding an ML training pipeline alongside it would split focus
+   without adding proportionate academic value.
+
+2. The concurrent negotiation scenario itself eliminates a key motivation for ML: in
+   concurrent mode, BA can simply accept the best deal that closes first rather than
+   needing to predict which dealer will offer the best outcome. The competitive pressure
+   of concurrent negotiations is a stronger mechanism than prediction for obtaining a
+   good deal.
+
+**Justification for report:**
+*"Linear regression on the live offer history is a principled statistical prediction
+method that achieves the prediction requirement without a training pipeline. The
+research contribution of this project is the concurrent negotiation protocol design,
+which is a different dimension of complexity from predictive modelling."*
+
+### Concurrent Design Key Decisions
+
+| Decision | Agreed |
+|---|---|
+| BA runs up to 3 simultaneous negotiations | Matches the shortlist size already established in v1/v2 |
+| KA contacts all shortlisted DAs at once | Replaces the sequential "advance on failure" pattern from v2 |
+| Each negotiation is independent | Separate NegotiationState and RegressionPredictor per dealer |
+| Accept one → walk away from all others immediately | Prevents BA from being committed to multiple deals simultaneously |
+| Fixed fee charged per connected DA | Up to 3 fees possible; consistent with the fee model and explicitly noted in report |
+| AgentRegistry replaces static window coupling | Static field is not safe for concurrent window creation; registry keyed by agent name |
+| JADE serialisation handles thread safety | JADE serialises behaviour execution per agent; no additional synchronisation needed inside agent state maps |

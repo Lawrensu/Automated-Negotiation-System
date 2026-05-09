@@ -65,7 +65,7 @@ public class LauncherWindow extends JFrame {
 		this.accent         = Color.decode(Config.get("gui.accentColour"));
 
 		setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-		setSize(400, 280);
+		setSize(420, 320);
 		setLocationRelativeTo(null);
 		setResizable(false);
 
@@ -88,19 +88,22 @@ public class LauncherWindow extends JFrame {
 		root.add(title, BorderLayout.NORTH);
 
 		// Button panel
-		JPanel btnPanel = new JPanel(new GridLayout(3, 1, 0, 10));
+		JPanel btnPanel = new JPanel(new GridLayout(4, 1, 0, 10));
 		btnPanel.setBackground(Color.WHITE);
 
 		JButton dealerBtn = makeButton("Start as Dealer");
 		JButton buyerBtn  = makeButton("Start as Buyer");
+		JButton autoBuyerBtn = makeButton("Start as Automated Buyer");
 		JButton logBtn    = makeButton("View Broker Log");
 
 		dealerBtn.addActionListener(e -> openDealerWindow());
 		buyerBtn.addActionListener(e  -> openBuyerWindow());
+		autoBuyerBtn.addActionListener(e -> openAutoBuyerWindow());
 		logBtn.addActionListener(e    -> openBrokerLog());
 
 		btnPanel.add(dealerBtn);
 		btnPanel.add(buyerBtn);
+		btnPanel.add(autoBuyerBtn);
 		btnPanel.add(logBtn);
 		root.add(btnPanel, BorderLayout.CENTER);
 
@@ -168,6 +171,12 @@ public class LauncherWindow extends JFrame {
 
 	private void openBuyerWindow() {
 		new BuyerWindow(container).setVisible(true);
+	}
+
+	private void openAutoBuyerWindow() {
+		// Each auto buyer gets a unique id like "AutoBuyer1", "AutoBuyer2", so they can run concurrently.
+		String agentName = "AutoBuyer" + System.currentTimeMillis() % 10000; // simple way to get a unique suffix
+		new AutoBuyerWindow(container, agentName).setVisible(true);
 	}
 
 	private void openBrokerLog() {

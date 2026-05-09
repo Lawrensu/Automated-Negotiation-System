@@ -56,7 +56,8 @@ public class BuyerAgent extends Agent {
 
 	private BuyerRequirements             requirements;
 	private double                        reservePrice;           // private, never transmitted
-	private Map<String, NegotiationState> activeNegotiations;    // carId → state
+	// Change from private to protected so AutoBuyerAgent can access it for strategy calculations
+	protected Map<String, NegotiationState> activeNegotiations;    // carId → state
 	private Map<String, AID>             dealerAIDs;            // carId → dealer AID
 	private Map<String, Double>           submittedOfferAmounts; // carId → first offer BA sent
 	private double                        alpha;                 // concession shape; default linear
@@ -105,6 +106,15 @@ public class BuyerAgent extends Agent {
 	public BuyerRequirements getRequirements() {
 		return requirements;
 	}
+
+
+	// Overide the default alpha (concession shape) used in TimeBasedStrategy for autonomous behaviour
+	public void setAlpha(double alpha) {
+		this.alpha = (alpha > 0) ? alpha : 1.0;
+	}
+
+	public double getAlpha() { return alpha; }
+
 
 	/**
 	 * Send the search request to KA. Called by BuyerWindow's "Search" button
@@ -220,10 +230,16 @@ public class BuyerAgent extends Agent {
 	/**
 	 * Called on every incoming offer (CFP at round 0, PROPOSE at round 1+).
 	 * Override in BuyerWindow to display the offer and enable the response buttons.
-	 */
-	protected void onNegotiationOfferReceived(String carId, Offer offer) {
+	 *
+	 * return false to tell NegotiationBehaviour to block and wait for
+	 * the human to respond via submitOffer/acceptDeal/walkAway.
+	 * AutoBuyerAgent overrides this to return true after responding
+	 * autonomously, so the behaviour does NOT block.
+	*/
+	protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 		System.out.println("[BA] Offer received: RM" + String.format("%.2f", offer.getAmount())
 				+ " for " + carId + " (round " + offer.getRound() + ")");
+		return false; // manual mode: block and wait for human
 	}
 
 	/** Called when a negotiation ends (deal or failure). Override to show outcome in GUI. */
@@ -369,10 +385,15 @@ public class BuyerAgent extends Agent {
 
 					NegotiationState state = new NegotiationState(
 							carId, maxRounds, firstOffer, reservePrice, alpha);
+					// Record DA's opening offer as the first opponent offer in the history
+					state.recordOpponentOffer(offer);
 					activeNegotiations.put(carId, state);
 
-					onNegotiationOfferReceived(carId, offer);
-					block();
+					boolean handled = onNegotiationOfferReceived(carId, offer);
+					// If the hook returned false, it means the GUI is handling this offer and waiting for user input 
+					if (!handled) {
+						block(); 
+					}
 				}
 
 				case ACLMessage.PROPOSE -> {
@@ -389,8 +410,10 @@ public class BuyerAgent extends Agent {
 						return;
 					}
 
-					onNegotiationOfferReceived(carId, offer);
-					block();
+					boolean handled = onNegotiationOfferReceived(carId, offer);
+					if (!handled) {
+						block();
+					}
 				}
 
 				case ACLMessage.ACCEPT_PROPOSAL -> {

@@ -1,6 +1,8 @@
 # Automated Negotiation System — Technical Implementation Design
 
 > This document maps the system design into concrete implementation decisions. It is intended for the development team to implement from. Every decision here traces back to the system design document.
+>
+> Sections marked **[v1]**, **[v2]**, or **[Ext1]** indicate which version introduced or modified that section. Unmarked sections apply to all versions.
 
 ---
 
@@ -28,19 +30,37 @@ broker.commissionRate=0.02
 negotiation.maxRounds=20
 negotiation.budgetTolerance=1.25
 
+# v2: Concession strategy defaults
+negotiation.alphaDealer=0.7
+negotiation.alphaBuyer=1.0
+
+# v2: Regression predictor gates
+negotiation.regressionMinPoints=3
+negotiation.regressionMinR2=0.80
+negotiation.boulwareSlopeThreshold=50.0
+
+# v2: DA shortening threshold
+negotiation.bestOfferThreshold=500.0
+
 # GUI
 gui.accentColour=#1E3A5F
 ```
 
 Values and what they control:
 
-| Key | Default | What it controls |
-|---|---|---|
-| broker.fixedFee | 500.00 | Fixed fee charged to DA when KA connects DA–BA pair and negotiation begins (in RM) |
-| broker.commissionRate | 0.02 | Commission rate charged to DA on final deal price (0.02 = 2%) |
-| negotiation.maxRounds | 20 | Default round limit T — configurable via GUI before each negotiation, this is the startup default |
-| negotiation.budgetTolerance | 1.25 | KA includes listings up to this multiple of BA's reserve price (1.25 = 125%) |
-| gui.accentColour | #1E3A5F | Accent colour used across all Swing windows |
+| Key | Default | Version | What it controls |
+|---|---|---|---|
+| broker.fixedFee | 500.00 | all | Fixed fee charged to DA when KA connects DA–BA pair (in RM) |
+| broker.commissionRate | 0.02 | all | Commission rate charged to DA on final deal price (0.02 = 2%) |
+| negotiation.maxRounds | 20 | all | Default round limit T — configurable via GUI before each negotiation |
+| negotiation.budgetTolerance | 1.25 | all | KA includes listings up to this multiple of BA's reserve price |
+| negotiation.alphaDealer | 0.7 | v2+ | DA concession curve shape (0.7 = Conceder-leaning) |
+| negotiation.alphaBuyer | 1.0 | v2+ | BA concession curve shape (1.0 = Linear) |
+| negotiation.regressionMinPoints | 3 | v2+ | Minimum opponent offers before regression predictor fires |
+| negotiation.regressionMinR2 | 0.80 | v2+ | R² confidence gate; below this, regression is suppressed |
+| negotiation.boulwareSlopeThreshold | 50.0 | v2+ | Slope (RM/round) below which Boulware detection suppresses regression |
+| negotiation.bestOfferThreshold | 500.0 | v2+ | RM gap at which DA makes final aggressive offer to close |
+| gui.accentColour | #1E3A5F | all | Accent colour used across all Swing windows |
 
 **Config.java utility class**
 
@@ -103,7 +123,8 @@ automated-negotiation-system/
     │   └── NegotiationState.java        ← internal negotiation tracker (not transmitted)
     ├── strategy/
     │   ├── ConcessionStrategy.java      ← interface
-    │   └── TimeBasedStrategy.java       ← Faratin formula implementation
+    │   ├── TimeBasedStrategy.java       ← Faratin formula implementation [v2]
+    │   └── RegressionPredictor.java     ← linear regression on opponent offer history [v2]
     ├── util/
     │   └── MessageBuilder.java          ← ACL message factory
     └── gui/
@@ -295,7 +316,7 @@ State:
 
 ---
 
-## Concession Strategy (v2)
+## Concession Strategy [v2]
 
 ### ConcessionStrategy.java (interface)
 
@@ -310,25 +331,109 @@ interface ConcessionStrategy {
 
 Faratin et al. (1998) time-based concession formula.
 
+```java
+public double calculateNextOffer(NegotiationState state, boolean isDealer) {
+    double t      = state.getCurrentRound();
+    double T      = state.getMaxRounds();
+    double alpha  = state.getAlpha();
+    double factor = Math.pow(t / T, 1.0 / alpha);
+
+    if (isDealer) {
+        double floor  = state.getOwnReserveOrFloor();   // floor price
+        double retail = state.getOwnFirstOffer();        // retail price (DA opening)
+        return floor + (retail - floor) * (1.0 - factor);
+    } else {
+        double first   = state.getOwnFirstOffer();       // BA opening bid
+        double reserve = state.getOwnReserveOrFloor();   // reserve price
+        return first + (reserve - first) * factor;
+    }
+}
 ```
-factor(t, T, α) = ( t / T ) ^ ( 1 / α )
 
-Dealer offer at round t:
-  = floorPrice + ( retailPrice − floorPrice ) × ( 1 − factor )
-  Starts near retailPrice, moves down toward floorPrice as rounds increase
-
-Buyer offer at round t:
-  = firstOffer + ( reservePrice − firstOffer ) × factor
-  Starts at firstOffer, moves up toward reservePrice as rounds increase
-```
-
-Accept condition (either agent):
-
-- If the opponent's offer has crossed the agent's own current calculated offer → accept
-- If the opponent's offer meets or beats the agent's last stated offer → accept
+**Base accept condition (either agent):**
+- If opponent's offer has crossed the agent's own current calculated offer → accept
 - If |myNextOffer − opponentOffer| < 1.00 (convergence threshold) → accept
 
-The $1.00 convergence threshold handles floating-point arithmetic differences. Math.pow() with different alpha values will not produce bitwise-equal doubles even for economically identical prices.
+The RM1.00 convergence threshold handles floating-point arithmetic differences across different α values.
+
+---
+
+## Regression Predictor [v2]
+
+### RegressionPredictor.java
+
+Fits a least-squares linear regression on the opponent's offer history and predicts
+where offers are heading at the deadline. Used to enhance the accept condition and
+enable early walk-away when no deal is possible.
+
+```java
+public class RegressionPredictor {
+    private final List<double[]> points = new ArrayList<>(); // {round, offer}
+
+    public void addPoint(int round, double offer) {
+        points.add(new double[]{round, offer});
+    }
+
+    public boolean isReliable(double minR2, double slopeThreshold) {
+        if (points.size() < Config.getInt("negotiation.regressionMinPoints")) return false;
+        return rSquared() >= minR2 && Math.abs(slope()) >= slopeThreshold;
+    }
+
+    public double predictAt(int futureRound) {
+        double xMean = points.stream().mapToDouble(p -> p[0]).average().orElse(0);
+        double yMean = points.stream().mapToDouble(p -> p[1]).average().orElse(0);
+        double num = 0, den = 0;
+        for (double[] p : points) {
+            num += (p[0] - xMean) * (p[1] - yMean);
+            den += (p[0] - xMean) * (p[0] - xMean);
+        }
+        double slope     = (den == 0) ? 0 : num / den;
+        double intercept = yMean - slope * xMean;
+        return intercept + slope * futureRound;
+    }
+
+    private double slope() { /* same slope calculation as predictAt */ }
+    private double rSquared() { /* 1 - SS_res / SS_tot */ }
+}
+```
+
+**Enhanced accept condition (wraps the base Faratin condition):**
+
+```java
+// Called each round after receiving opponent offer
+private void processIncomingOffer(Offer opponentOffer, NegotiationState state,
+                                   RegressionPredictor regressor, boolean isDealer) {
+    regressor.addPoint(state.getCurrentRound(), opponentOffer.getAmount());
+
+    double myFaratinOffer = strategy.calculateNextOffer(state, isDealer);
+    double minR2          = Config.getDouble("negotiation.regressionMinR2");
+    double slopeThreshold = Config.getDouble("negotiation.boulwareSlopeThreshold");
+
+    boolean accept = strategy.shouldAccept(opponentOffer.getAmount(), state, isDealer);
+
+    if (!accept && regressor.isReliable(minR2, slopeThreshold)) {
+        double opponentFirst = state.getOpponentOfferHistory().get(0).getAmount();
+        double lowerBound    = isDealer ? opponentOffer.getAmount() : opponentFirst;
+        double upperBound    = isDealer ? opponentFirst : opponentOffer.getAmount();
+        double predicted     = Math.max(lowerBound, Math.min(upperBound,
+                                   regressor.predictAt(state.getMaxRounds())));
+
+        // Accept early if opponent is predicted to reach our price
+        if (isDealer && predicted >= myFaratinOffer) accept = true;
+        if (!isDealer && predicted <= myFaratinOffer) accept = true;
+
+        // Early walk-away if no overlap
+        // (DA: predicted BA ceiling still below DA floor)
+        // (BA: predicted DA floor still above BA reserve)
+        double ownLimit = state.getOwnReserveOrFloor();
+        if (isDealer && predicted < ownLimit) { walkAway(state); return; }
+        if (!isDealer && predicted > ownLimit) { walkAway(state); return; }
+    }
+
+    if (accept) acceptDeal(opponentOffer, state);
+    else        sendOffer(myFaratinOffer, state);
+}
+```
 
 ---
 
@@ -415,24 +520,19 @@ Built with Java Swing. All windows extend JFrame. Main.java boots JADE then laun
 
 ## Edge Case Handling in Code
 
-| Edge case                     | Where handled                     | How                                                                                                     |
-| ----------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| No matching listings          | KA HandleBuyerSearchBehaviour     | Send INFORM with empty list; BA shows "no matches" message                                              |
-| All dealers decline           | KA ReceiveDealerResponseBehaviour | shortlistProgress index exceeds list size; send INFORM to BA "no dealer engaged"                        |
-| First offer below floor price | DA ReceiveBuyerInterestBehaviour  | if offer.amount < floorPrices.get(carId) → send "reject" to KA immediately                              |
-| Round limit reached           | DA or BA NegotiationBehaviour     | if state.currentRound >= state.maxRounds → send REJECT_PROPOSAL to opponent, INFORM "deal-failed" to KA |
-| BA stops responding           | DA NegotiationBehaviour           | if no message received after waiting → treat as failed, send INFORM "deal-failed" to KA                 |
-| DA stops responding           | BA NegotiationBehaviour           | if no message received after waiting → treat as failed, send INFORM "deal-failed" to KA                 |
-|                               |                                   |                                                                                                         |
-
----
-
-## Questions (Confirm Before v2 and Extension 1)
-
-1. Should α (negotiation strategy) be adjustable by the user before each negotiation, or fixed system-wide? Current design: user-adjustable before negotiation, locked during.
-2. Is the assignment's emphasis on simulating academic negotiation behaviour (clean concession curves, controlled experiments) or simulating real-world market behaviour (adaptive strategies, realistic pricing)? This affects the v2 strategy design and how the report's analysis section is framed.
-3. For Extension 1 concurrent negotiations: the fixed fee is charged to the dealer when KA connects the dealer and buyer and negotiation begins. If a buyer negotiates with 3 dealers simultaneously, up to 3 different dealers could each be charged a fixed fee. Is this interpretation of the assignment correct?
-4. What are appropriate fixed fee and commission rate values for the demo scenario? Current defaults are RM500 fixed fee and 2% commission, both configurable via config.properties. Confirm before the final demonstration.
+| Edge case | Version | Where handled | How |
+|---|---|---|---|
+| No matching listings | all | KA HandleBuyerSearchBehaviour | Send INFORM with empty list; BA shows "no matches" message |
+| All dealers decline | all | KA ReceiveDealerResponseBehaviour | shortlistProgress index exceeds list size; send INFORM to BA "no dealer engaged" |
+| First offer below floor price | all | DA ReceiveBuyerInterestBehaviour | if offer.amount < floorPrices.get(carId) → send "reject" to KA immediately |
+| Round limit reached | all | DA or BA NegotiationBehaviour | if state.currentRound >= state.maxRounds → REJECT_PROPOSAL to opponent, INFORM "deal-failed" to KA |
+| BA stops responding | all | DA NegotiationBehaviour | if no message after timeout → treat as failed, INFORM "deal-failed" to KA |
+| DA stops responding | all | BA NegotiationBehaviour | if no message after timeout → treat as failed, INFORM "deal-failed" to KA |
+| Boulware opponent (slope near zero) | v2+ | RegressionPredictor.isReliable() | slope gate fails → regression suppressed → fall back to Faratin base only |
+| Low R² (noisy offers) | v2+ | RegressionPredictor.isReliable() | R² gate fails → regression suppressed → fall back to Faratin base only |
+| Insufficient history | v2+ | RegressionPredictor.isReliable() | size < minPoints → regression does not fire |
+| No-overlap detected | v2+ | processIncomingOffer() | predicted opponent limit beyond own limit → walkAway() called immediately |
+| Concurrent deal race | Ext1 | BA NegotiationBehaviour | JADE serialises behaviour execution per agent; first accept processed wins; others trigger walk-away |
 
 ---
 
