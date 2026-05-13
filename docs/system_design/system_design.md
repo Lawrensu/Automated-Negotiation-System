@@ -64,8 +64,10 @@
 | Negotiation is price only | Yes: other attributes (model, year, etc.) are for display and information only |
 | Negotiation strategy | Faratin time-based concession formula; α configurable per agent |
 | Prediction algorithm | Linear regression on live opponent offer history; gated by R², slope threshold, min data points |
-| v1 negotiation | Manual: human operates BA and DA via GUI |
-| v2 negotiation | Automated: BA and DA negotiate autonomously; BA is the required automation; DA automated to enable simulation and report analysis |
+| v1 negotiation | Manual only: both DA and BA are human-operated via GUI |
+| v2 negotiation | Mode-selectable per negotiation: each agent independently chooses Manual or Auto before each negotiation begins; any combination is valid (Manual–Manual, Manual–Auto, Auto–Manual, Auto–Auto) |
+| Mode selection timing | Per negotiation: selected in the Negotiation tab before the first offer is sent; locked once negotiation begins; can differ between negotiations in the same session |
+| DA α entry point | Negotiation tab, after accepting buyer interest and before first CFP; α is a negotiation strategy parameter not a car attribute; per-negotiation entry is consistent with per-negotiation mode selection |
 | Extension | Concurrent negotiations (multiple dealers at the same time) |
 | No machine learning | Rejected: no training data; Extension 1 is the research contribution; regression satisfies the prediction requirement |
 | KA facilitation | KA gives DA the AID of BA and vice versa, then steps back |

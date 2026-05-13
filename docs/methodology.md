@@ -327,7 +327,48 @@ gui.accentColour=#1E3A5F       # Accent colour applied across all Swing windows
 
 ---
 
-## 7. Concession Strategy — Faratin Time-Based Formula (v2)
+## 7. v2 Mode Selection Design
+
+### Choice: Per-Negotiation Mode Selection (Manual or Auto, independently per agent)
+
+**Confirmed by Dr. Lee:** both the dealer and buyer independently select their negotiation mode, and any combination across the two agents is valid.
+
+**Per-negotiation (not per-session) rationale:**
+- Maximum flexibility for the report's experimentation and demo scenarios because the same session can demonstrate Manual–Auto followed by Full Auto for direct comparison without restarting agents.
+- Per-session locking would require restarting agents to change strategy, wasting demo time and making side-by-side comparisons within one session impossible.
+
+**Mode selection placement — Negotiation tab, after commit and before first offer:**
+For BA: appears after receiving the dealer's AID from KA, before the opening CFP arrives.
+For DA: appears after clicking Accept on buyer interest, before the first CFP is sent.
+
+**Rationale for this placement:**
+- At this point both parties have committed to negotiating with each other (DA has accepted,
+  AID exchange has happened) but no offers have been sent — the setup window is clean
+- The negotiation context is known (which car, which buyer) before the mode is chosen,
+  allowing an informed decision
+- Locking on first offer prevents mid-negotiation mode switching, which would violate
+  the information asymmetry principle (switching from manual to auto mid-negotiation
+  would reveal behavioural intent to an observant opponent)
+
+**DA α entry in Negotiation tab (not Listings tab) rationale:**
+α is a negotiation strategy parameter, not a car attribute. Entering it at listing time
+would imply one fixed strategy per car regardless of buyer. Per-negotiation mode
+selection requires per-negotiation α entry. The Negotiation tab provides the correct
+timing — after the negotiation context is established, before the first offer.
+
+**Alternatives rejected:**
+| Alternative | Reason Rejected |
+|---|---|
+| Per-session mode (set at agent startup) | Cannot switch modes within a session; inflexible for report demos and experiments |
+| α entered at Listings tab | α is not a property of the car; implies one strategy per car; incompatible with per-negotiation selection |
+| Mode toggle during negotiation | Violates information asymmetry; switching from manual to auto mid-negotiation reveals strategy intent |
+
+---
+
+## 8. Concession Strategy — Faratin Time-Based Formula (v2, Auto mode only)
+
+*This strategy applies only when an agent has selected Auto mode for a given negotiation.
+Manual mode agents make decisions through human input; the formula does not run.*
 
 ### Choice: Faratin et al. (1998) Time-Based Concession
 
@@ -372,7 +413,7 @@ BA offer at round t = firstOffer + (reservePrice − firstOffer) × factor
 
 ---
 
-## 8. Prediction Algorithm — Linear Regression on Offer History (v2)
+## 9. Prediction Algorithm — Linear Regression on Offer History (v2, Auto mode only)
 
 ### Choice: Real-Time Linear Regression on Opponent Offer Sequence
 
@@ -429,7 +470,7 @@ analysis section.
 
 ---
 
-## 9. Dealer Shortening Strategy (v2)
+## 10. Dealer Shortening Strategy (v2, Auto mode only)
 
 ### Choice: Conceder-Leaning α with Regression-Driven Early Commitment
 
@@ -459,7 +500,7 @@ not implementation.
 
 ---
 
-## 10. Extension 1 — Concurrent Negotiations
+## 11. Extension 1 — Concurrent Negotiations
 
 ### Choice: Concurrent over Multi-Attribute Negotiation
 

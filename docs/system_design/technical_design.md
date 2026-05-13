@@ -202,19 +202,30 @@ Internal tracker. Never transmitted. Each agent holds one per active negotiation
 
 ```
 Fields:
-  String          carId
-  int             maxRounds          ← T, default 20
-  int             currentRound       ← increments each exchange
-  double          ownFirstOffer      ← starting point for concession formula
-  double          ownReserveOrFloor  ← private limit (reserve for BA, floor for DA)
-  double          alpha              ← α, set before negotiation, fixed during
-  List<Offer>     ownOfferHistory
-  List<Offer>     opponentOfferHistory
-  Status          status             ← ACTIVE, DEAL_REACHED, FAILED, WAITING
+  String              carId
+  int                 maxRounds          ← T, default 20
+  int                 currentRound       ← increments each exchange
+  double              ownFirstOffer      ← starting point for concession formula
+  double              ownReserveOrFloor  ← private limit (reserve for BA, floor for DA)
+  double              alpha              ← α, set before negotiation, fixed during [v2]
+  NegotiationMode     mode               ← MANUAL or AUTO, set before negotiation, fixed during [v2]
+  List<Offer>         ownOfferHistory
+  List<Offer>         opponentOfferHistory
+  Status              status             ← ACTIVE, DEAL_REACHED, FAILED, WAITING
 
 Enum Status:
   ACTIVE, DEAL_REACHED, FAILED, WAITING
+
+Enum NegotiationMode [v2]:
+  MANUAL   ← human operates this agent's side via GUI
+  AUTO     ← Faratin + regression runs automatically; no GUI input during negotiation
 ```
+
+**Mode field behaviour:**
+- Set from the Negotiation Setup panel before the first offer is sent
+- Read by `NegotiationBehaviour` each round to decide whether to call `TimeBasedStrategy` or wait for GUI input
+- Never transmitted: the opponent does not know whether the other side is manual or auto
+- `alpha` field is only meaningful when `mode == AUTO`; ignored in MANUAL mode
 
 ---
 
@@ -285,14 +296,26 @@ State:
 ```
 Behaviours:
   RegisterListingsBehaviour      ← OneShotBehaviour, runs on startup, sends listings to KA
-  ReceiveBuyerInterestBehaviour  ← CyclicBehaviour, handles KA INFORM with buyer interest
+  ReceiveBuyerInterestBehaviour  ← CyclicBehaviour, handles KA INFORM with buyer interest;
+                                   on Accept: triggers Negotiation Setup panel for mode + α selection [v2]
   NegotiationBehaviour           ← CyclicBehaviour or FSMBehaviour, handles Phase 3 offer loop
+
+  NegotiationBehaviour per-round logic [v2]:
+    if state.mode == MANUAL:
+      → fire onNegotiationOfferReceived() hook → GUI updates, waits for human button click
+      → human calls submitOffer() / acceptDeal() / walkAway() via button handler
+    if state.mode == AUTO:
+      → RegressionPredictor.addPoint(round, opponentOffer)
+      → myOffer = TimeBasedStrategy.calculateNextOffer(state, true)
+      → check enhanced accept condition (Faratin base + regression layer)
+      → apply DA shortening logic (regression-driven final commitment if gap < bestOfferThreshold)
+      → call submitOffer(myOffer) or acceptDeal() or walkAway() automatically
 
 State:
   List<CarListing>               inventory
   Map<String, Double>            floorPrices         ← carId → floor price (private)
-  Map<String, NegotiationState>  activeNegotiations  ← carId → state
-  double                         alpha               ← set via GUI before negotiation
+  Map<String, NegotiationState>  activeNegotiations  ← NegotiationState now includes mode + alpha [v2]
+  Map<String, RegressionPredictor> regressionPredictors ← one per active negotiation [v2]
 ```
 
 ### BuyerAgent (BA)
@@ -301,17 +324,24 @@ State:
 Behaviours:
   SearchBehaviour                ← OneShotBehaviour, sends requirements to KA
   ReceiveMatchesBehaviour        ← CyclicBehaviour, receives matched listings, waits for user to shortlist
-  ReceiveAIDExchangeBehaviour    ← CyclicBehaviour, receives dealer AID from KA, waits for CFP
+  ReceiveAIDExchangeBehaviour    ← CyclicBehaviour, receives dealer AID from KA; triggers Negotiation Setup panel [v2]
   NegotiationBehaviour           ← CyclicBehaviour or FSMBehaviour, handles Phase 3
 
-  In v1: NegotiationBehaviour waits for human input via GUI
-  In v2: NegotiationBehaviour calls TimeBasedStrategy to auto-calculate next offer
+  NegotiationBehaviour per-round logic [v2]:
+    if state.mode == MANUAL:
+      → fire onNegotiationOfferReceived() hook → GUI updates, waits for human button click
+      → human calls submitOffer() / acceptDeal() / walkAway() via button handler
+    if state.mode == AUTO:
+      → RegressionPredictor.addPoint(round, opponentOffer)
+      → myOffer = TimeBasedStrategy.calculateNextOffer(state, false)
+      → check enhanced accept condition (Faratin base + regression layer)
+      → call submitOffer(myOffer) or acceptDeal() or walkAway() automatically
 
 State:
   BuyerRequirements              requirements
   double                         reservePrice        ← private, never transmitted
-  Map<String, NegotiationState>  activeNegotiations
-  double                         alpha               ← set via GUI before negotiation
+  Map<String, NegotiationState>  activeNegotiations  ← NegotiationState now includes mode + alpha [v2]
+  Map<String, RegressionPredictor> regressionPredictors ← one per active negotiation [v2]
 ```
 
 ---
@@ -495,7 +525,12 @@ Built with Java Swing. All windows extend JFrame. Main.java boots JADE then laun
 - Negotiation tab: hidden (setVisible(false)) until KA sends buyer interest
     - Shows buyer AID and first offer
     - JButton: Accept, Decline
-    - On accept: shows offer history JTable, round counter JLabel, counter-offer JTextField, Accept JButton, Walk Away JButton
+    - On accept: [v2] Negotiation Setup panel appears:
+        JToggleButton pair: "Manual" / "Auto"
+        If Auto selected: JSlider for α (0.1–10.0), JLabel showing profile name (Conceder/Linear/Boulware)
+        JButton: "Confirm & Start" — locks mode, sends opening CFP
+    - If Manual mode: offer history JTable, round counter JLabel, counter-offer JTextField, Accept JButton, Walk Away JButton
+    - If Auto mode: auto-mode banner, live status panel (round, last sent, last received, regression prediction); no manual input
 
 ### BuyerWindow.java
 
@@ -506,9 +541,13 @@ Built with Java Swing. All windows extend JFrame. Main.java boots JADE then laun
     - JSpinner or drag-to-rank for ordering
     - JButton: Send Shortlist
 - Negotiation tab: hidden until AID exchange
+    - [v2] Negotiation Setup panel (visible before first offer is sent, hidden after):
+        JToggleButton pair: "Manual" / "Auto"
+        If Auto selected: JSlider for α (0.1–10.0), JLabel showing profile name
+        JButton: "Confirm & Start" — locks mode, sends/readies first offer
     - Shows dealer AID, current offer, round number, offer history JTable
-    - In v1: counter-offer JTextField + Accept, Counter, Walk Away buttons
-    - In v2: auto-mode indicator, shows calculated offers being sent, no manual input
+    - If Manual mode: counter-offer JTextField + Accept, Counter, Walk Away buttons (v1 behaviour)
+    - If Auto mode: auto-mode banner JLabel, live status panel (round, last sent, last received, regression prediction if active); no manual input fields
 
 ### BrokerLogWindow.java
 
