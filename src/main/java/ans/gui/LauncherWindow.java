@@ -94,16 +94,20 @@ public class LauncherWindow extends JFrame {
 		JButton dealerBtn = makeButton("Start as Dealer");
 		JButton buyerBtn  = makeButton("Start as Buyer");
 		JButton autoBuyerBtn = makeButton("Start as Automated Buyer");
+		JButton autoDealerBtn = makeButton("Start as Automated Dealer");
 		JButton logBtn    = makeButton("View Broker Log");
 
 		dealerBtn.addActionListener(e -> openDealerWindow());
 		buyerBtn.addActionListener(e  -> openBuyerWindow());
 		autoBuyerBtn.addActionListener(e -> openAutoBuyerWindow());
 		logBtn.addActionListener(e    -> openBrokerLog());
+		autoDealerBtn.addActionListener(e -> openAutoDealerWindow());
 
 		btnPanel.add(dealerBtn);
 		btnPanel.add(buyerBtn);
 		btnPanel.add(autoBuyerBtn);
+		btnPanel.add(autoDealerBtn);
+
 		btnPanel.add(logBtn);
 		root.add(btnPanel, BorderLayout.CENTER);
 
@@ -177,6 +181,12 @@ public class LauncherWindow extends JFrame {
 		// Each auto buyer gets a unique id like "AutoBuyer1", "AutoBuyer2", so they can run concurrently.
 		String agentName = "AutoBuyer" + System.currentTimeMillis() % 10000; // simple way to get a unique suffix
 		new AutoBuyerWindow(container, agentName).setVisible(true);
+	}
+
+	private void openAutoDealerWindow() {
+		// Each auto buyer gets a unique id like "AutoBuyer1", "AutoBuyer2", so they can run concurrently.
+		String agentName = "AutoDealer" + System.currentTimeMillis() % 10000; // simple way to get a unique suffix
+		new AutoDealerWindow(container, agentName).setVisible(true);
 	}
 
 	private void openBrokerLog() {

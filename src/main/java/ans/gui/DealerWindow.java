@@ -239,6 +239,14 @@ public class DealerWindow extends JFrame {
 		return container;
 	}
 
+	void showOffer(String carId, Offer offer) {
+		roundLabel.setText("Round: " + offer.getRound());
+		offerHistoryModel.addRow(new Object[]{
+				offer.getRound(), offer.getFromAgentId(),
+				String.format("%.2f", offer.getAmount())
+		});
+	}
+
 	private JPanel buildPhaseAPanel() {
 		JPanel panel = new JPanel(new BorderLayout(0, 16));
 		panel.setBorder(BorderFactory.createEmptyBorder(24, 32, 24, 32));
@@ -463,11 +471,12 @@ public class DealerWindow extends JFrame {
 		}
 
 		@Override
-		protected void onNegotiationOfferReceived(String carId, Offer offer) {
+		protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 			super.onNegotiationOfferReceived(carId, offer); // console log
-			if (window == null) return;
-			SwingUtilities.invokeLater(() ->
-					window.showNegotiationOffer(carId, offer));
+			if (window == null) {
+				SwingUtilities.invokeLater(() -> window.showOffer(carId, offer));
+			}
+			return false; 
 		}
 
 		@Override

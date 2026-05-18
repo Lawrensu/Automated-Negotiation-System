@@ -71,8 +71,8 @@ public class DealerAgent extends Agent {
 	// ── State (technical_design.md — DealerAgent section) ────────────────────
 
 	private List<CarListing>              inventory;
-	private Map<String, Double>           floorPrices;        // carId → floor price, private
-	private Map<String, NegotiationState> activeNegotiations; // carId → negotiation state
+	protected Map<String, Double>           floorPrices;        // carId → floor price, private
+	protected Map<String, NegotiationState> activeNegotiations; // carId → negotiation state
 	private double                        alpha;              // concession shape, set via GUI
 	private AID                           brokerAID;
 
@@ -170,6 +170,13 @@ public class DealerAgent extends Agent {
 		inventory.add(listing);
 		floorPrices.put(listing.getCarId(), floorPrice);
 	}
+
+	public void setAlpha(double alpha) {
+		this.alpha = (alpha > 0) ? alpha : 1.0;
+	}
+
+	public double getAlpha() { return alpha; }
+
 
 	public List<CarListing> getInventory() {
 		return inventory;
@@ -292,9 +299,10 @@ public class DealerAgent extends Agent {
 	 * DealerWindow overrides this to update the offer history table and prompt
 	 * the human to respond.
 	 */
-	protected void onNegotiationOfferReceived(String carId, Offer offer) {
+	protected boolean onNegotiationOfferReceived(String carId, Offer offer) {
 		System.out.println("[DA] Incoming offer: RM " + offer.getAmount()
 				+ " for " + carId + " (round " + offer.getRound() + ")");
+		return false;
 	}
 
 	/**
@@ -428,7 +436,7 @@ public class DealerAgent extends Agent {
 			// Notify GUI (or test agent override)
 			onBuyerInterestReceived(carId, buyerAIDName, offer);
 
-			// If onBuyerInterestReceived() already called accept/declineBuyerInterest()
+			// If onBuyerInterestReceived() already called accept/decline BuyerInterest()
 			// synchronously, interestPhase is no longer WAITING_FOR_INTEREST — don't block.
 			if (interestPhase == InterestPhase.WAITING_FOR_INTEREST) {
 				// GUI path: human hasn't decided yet — block until button click
@@ -535,8 +543,12 @@ public class DealerAgent extends Agent {
 					// Display the incoming offer via GUI hook; human responds using
 					// submitOffer(), acceptDeal(), or walkAway() from DealerWindow.
 					// NegotiationBehaviour wakes naturally when BA's next message arrives.
-					onNegotiationOfferReceived(carId, offer);
-					block();
+					
+					boolean handled = onNegotiationOfferReceived(carId, offer);
+
+					if (!handled) {
+						block();
+					}
 				}
 
 				case ACLMessage.ACCEPT_PROPOSAL -> {
